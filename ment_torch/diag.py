@@ -1,25 +1,12 @@
 import copy
 import math
+import torch
 from typing import Union
 from typing import Self
 
-import torch
-
-
-def coords_to_edges(coords: torch.Tensor) -> torch.Tensor:
-    delta = coords[1] - coords[0]
-    edges = torch.zeros(len(coords) + 1)
-    edges[:-1] = coords - 0.5 * delta
-    edges[-1] = coords[-1] + delta
-    return edges
-
-
-def edges_to_coords(edges: torch.Tensor) -> torch.Tensor:
-    return 0.5 * (edges[:-1] + edges[1:])
-
-
-def get_grid_points(grid_coords) -> torch.Tensor:
-    return torch.stack([C.ravel() for C in torch.meshgrid(*grid_coords, indexing="ij")], axis=-1)
+from .utils import coords_to_edges
+from .utils import edges_to_coords
+from .utils import get_grid_points
 
 
 class Histogram:

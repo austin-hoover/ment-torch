@@ -1,3 +1,4 @@
+import math
 import torch
 
 
@@ -13,12 +14,14 @@ class Prior:
 
 
 class GaussianPrior(Prior):
-    def __init__(self, scale: torch.Tensor, **kws) -> None:
+    def __init__(self, scale: torch.Tensor | float, **kws) -> None:
         super().__init__(**kws)
         self.scale = scale
+        if type(self.scale) is not torch.Tensor:
+            self.scale = self.scale * torch.ones(self.ndim)
 
     def prob(self, x: torch.Tensor) -> torch.Tensor:
-        denom = torch.sqrt((2.0 * torch.pi) ** self.ndim) * torch.sqrt(torch.prod(self.scale))
+        denom = math.sqrt((2.0 * math.pi) ** self.ndim) * torch.sqrt(torch.prod(self.scale))
         prob = torch.exp(-0.5 * torch.sum(torch.square(x / self.scale), axis=1))
         prob = prob / denom
         return prob
