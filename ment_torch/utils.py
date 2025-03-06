@@ -7,5 +7,5 @@ def unravel(iterable):
 
 
 def rotation_matrix(angle: float) -> torch.Tensor:
-    angle = torch.tensor(angle)
+    angle = torch.tensor(float(angle))
     return torch.tensor([[torch.cos(angle), torch.sin(angle)], [-torch.sin(angle), torch.cos(angle)]])
