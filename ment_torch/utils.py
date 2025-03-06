@@ -1,5 +1,6 @@
 import itertools
 import torch
+from tqdm import tqdm
 
 
 def unravel(iterable):
@@ -25,3 +26,7 @@ def edges_to_coords(edges: torch.Tensor) -> torch.Tensor:
 
 def get_grid_points(grid_coords: list[torch.Tensor]) -> torch.Tensor:
     return torch.stack([c.ravel() for c in torch.meshgrid(*grid_coords, indexing="ij")], axis=-1)
+
+
+def wrap_tqdm(iterable, verbose=True):
+    return tqdm(iterable) if verbose else iterable

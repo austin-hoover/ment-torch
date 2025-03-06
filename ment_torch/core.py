@@ -3,12 +3,15 @@ from typing import Union
 from typing import Any
 
 import itertools
+import numpy as np
 import torch
 
 from .diag import Histogram
 from .prior import InfiniteUniformPrior
 from .sim import IdentityTransform
 from .sim import LinearTransform
+from .utils import get_grid_points
+from .utils import wrap_tqdm
 
 
 class RegularGridInterpolator:
@@ -240,5 +243,185 @@ class MENT:
 
         z = self.sampler(prob_func, size, **kws)
         return z
+
+    def get_projection_points(self, index: int, diag_index: int) -> torch.Tensor:
+        """Return points on projection axis for specified diagnostic."""
+        diagnostic = self.diagnostics[index][diag_index]
+        return diagnostic.get_grid_points()
+
+    def get_integration_points(self, index: int, diag_index: int, method: str = "grid") -> torch.Tensor:
+        """Return integration points for specific diagnnostic."""
+        if self.integration_points is not None:
+            return self.integration_points
+
+        diagnostic = self.diagnostics[index][diag_index]
+
+        projection_axis = diagnostic.axis
+        if type(projection_axis) is int:
+            projection_axis = (projection_axis,)
+
+        integration_axis = tuple([axis for axis in range(self.ndim) if axis not in projection_axis])
+        integration_ndim = len(integration_axis)
+        integration_limits = self.integration_limits[index][diag_index]
+        integration_size = self.integration_size
+        integration_points = None
+
+        if (integration_ndim == 1) and (np.ndim(integration_limits) == 1):
+            integration_limits = [integration_limits]
+
+        if method == "grid":
+            integration_grid_resolution = int(integration_size ** (1.0 / integration_ndim))
+            integration_grid_shape = tuple(integration_ndim * [integration_grid_resolution])
+            integration_grid_coords = [
+                torch.linspace(
+                    integration_limits[i][0],
+                    integration_limits[i][1],
+                    integration_grid_shape[i],
+                )
+                for i in range(integration_ndim)
+            ]
+            if integration_ndim == 1:
+                integration_points = integration_grid_coords[0]
+            else:
+                integration_points = get_grid_points(integration_grid_coords)
+        else:
+            raise NotImplementedError
+
+        self.integration_points = integration_points
+        return self.integration_points
+
+    def simulate(self) -> list[list[Histogram]]:
+        """Simulate all measurements."""
+        diagnostic_copies = []
+        for index in range(len(self.diagnostics)):
+            diagnostic_copies.append([])
+            for diag_index in range(len(self.diagnostics[index])):
+                diagnostic_copy = self.simulate_single(index, diag_index)
+                diagnostic_copies[-1].append(diagnostic_copy)
+        return diagnostic_copies
+
+    def simulate_single(self, index: int, diag_index: int) -> Histogram:
+        """Simulate a single measurement.
+
+        Parameters
+        ----------
+        index : int
+            Transformation index.
+        diag_index : int
+            Diagnostic index for the given transformation.
+
+        Returns
+        -------
+        Histogram
+            Copy of updated histogram diagnostic.
+        """
+        transform = self.transforms[index]
+        diagnostic = self.diagnostics[index][diag_index]
+        diagnostic.values *= 0.0
+        
+        values_proj = torch.clone(diagnostic.values)
+        
+        if self.mode in ["sample", "forward"]:
+            values_proj = diagnostic(transform(self.unnormalize(self.sample(self.nsamp))))
+
+        elif self.mode in ["integrate", "backward"]:
+            # Get projection grid axis.
+            projection_axis = diagnostic.axis
+            if type(projection_axis) is int:
+                projection_axis = (projection_axis,)
+            projection_ndim = len(projection_axis)
+
+            # Get integration grid axis and limits.
+            integration_axis = [axis for axis in range(self.ndim) if axis not in projection_axis]
+            integration_axis = tuple(integration_axis)
+            integration_ndim = len(integration_axis)
+            integration_limits = self.integration_limits[index][diag_index]
+
+            # Get points on integration and projection grids.
+            projection_points = self.get_projection_points(index, diag_index)
+            integration_points = self.get_integration_points(index, diag_index)
+
+            # Initialize array of integration points (u).
+            u = torch.zeros((integration_points.shape[0], self.ndim))
+            for k, axis in enumerate(integration_axis):
+                if integration_ndim == 1:
+                    u[:, axis] = integration_points
+                else:
+                    u[:, axis] = integration_points[:, k]
+
+            # Initialize array of projected densities (values_proj).
+            values_proj = torch.zeros(projection_points.shape[0])
+            for i, point in enumerate(wrap_tqdm(projection_points, self.verbose > 1)):
+                # Set values of u along projection axis.
+                for k, axis in enumerate(projection_axis):
+                    if diagnostic.ndim == 1:
+                        u[:, axis] = point
+                    else:
+                        u[:, axis] = point[k]
+
+                # Compute the probability density at the integration points.
+                # Here we assume a volume-preserving transformation with Jacobian
+                # determinant equal to 1, such that p(x) = p(u).
+                prob = self.prob(self.normalize(transform.inverse(u)))
+
+                # Sum over all integration points.
+                values_proj[i] = torch.sum(prob)
+
+            # Reshape the projected density array.
+            if diagnostic.ndim > 1:
+                values_proj = values_proj.reshape(diagnostic.shape)
+
+        else:
+            raise ValueError(f"Invalid mode {self.mode}")
+
+        # Update the diagnostic values.
+        diagnostic.values = values_proj
+        diagnostic.normalize()
+
+        # Return a copy of the diagnostic.
+        return diagnostic.copy()
+
+    def gauss_seidel_step(self, learning_rate: float = 1.0) -> None:
+        """Perform Gauss-Seidel update.
+
+        The update is defined as:
+
+            h *= 1.0 + omega * ((g_meas / g_pred) - 1.0)
+
+        where h = exp(lambda) is the lagrange function, 0 < omega <= 1 is a learning
+        rate or damping parameter, g_meas is the measured projection, and g_pred
+        is the simulated projection.
+        """
+        for index, transform in enumerate(self.transforms):
+            if self.verbose:
+                print(f"transform={index}")
+
+            for diag_index in range(len(self.diagnostics[index])):
+                if self.verbose:
+                    print(f"diagnostic={diag_index}")
+
+                # Get lagrange multpliers, measured and simulated projections
+                hist_pred = self.simulate_single(index=index, diag_index=diag_index)
+                hist_meas = self.projections[index][diag_index]
+                lagrange_function = self.lagrange_functions[index][diag_index]
+
+                # Unravel values array
+                values_lagr = torch.clone(lagrange_function.values)
+                values_meas = torch.clone(hist_meas.values)
+                values_pred = torch.clone(hist_pred.values)
+
+                # Update lagrange multipliers
+                idx = torch.logical_and(values_meas > 0.0, values_pred > 0.0)
+                ratio = torch.ones(values_lagr.shape)
+                ratio[idx] = values_meas[idx] / values_pred[idx]
+                values_lagr *= 1.0 + learning_rate * (ratio - 1.0)
+
+                # Reset
+                lagrange_function.values = values_lagr
+                lagrange_function.set_values(lagrange_function.values)
+                self.lagrange_functions[index][diag_index] = lagrange_function
+
+        self.epoch += 1
+
 
         
