@@ -1,5 +1,14 @@
+from typing import Callable
+from typing import Union
+from typing import Any
+
 import itertools
 import torch
+
+from .diag import Histogram
+from .prior import InfiniteUniformPrior
+from .sim import IdentityTransform
+from .sim import LinearTransform
 
 
 class RegularGridInterpolator:
@@ -95,3 +104,110 @@ class LagrangeFunction:
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         x_proj = x[:, self.axis]
         return self.interp(x_proj.T)
+
+
+class MENT:
+    def __init__(
+        self,
+        ndim: int,
+        transforms: list[Callable],
+        projections: list[list[Histogram]],
+        prior: Any,
+        sampler: Callable,
+        unnorm_matrix: torch.Tensor = None,
+        nsamp: int = 1_000_000,
+        integration_limits: list[tuple[float, float]] = None,
+        integration_size: int = None,
+        store_integration_points: bool = True,
+        verbose: int = 1,
+        mode: str = "sample",
+    ) -> None:
+        """Constructor."""
+        self.ndim = ndim
+        self.verbose = int(verbose)
+        self.mode = mode
+
+        self.transforms = transforms
+        self.projections = self.set_projections(projections)
+
+        self.diagnostics = []
+        for index in range(len(self.projections)):
+            self.diagnostics.append([hist.copy() for hist in self.projections[index]])
+
+        self.prior = prior
+        if self.prior is None:
+            self.prior = InfiniteUniformPrior(ndim=ndim)
+
+        self.unnorm_matrix = unnorm_matrix
+        self.unnorm_transform = self.set_unnorm_transform(unnorm_matrix)
+
+        self.lagrange_functions = self.init_lagrange_functions()
+
+        self.sampler = sampler
+        self.nsamp = int(nsamp)
+
+        self.integration_limits = integration_limits
+        self.integration_size = integration_size
+        self.integration_points = None
+        self.store_integration_points = store_integration_points
+
+        self.epoch = 0
+
+    def set_unnorm_transform(self, unnorm_matrix: torch.Tensor) -> Callable:
+        """Set inverse of normalization matrix.
+
+        The unnormalization matrix transforms normalized coordinates z to
+        phase space coordinates x via the linear mapping: x = Vz.
+        """
+        self.unnorm_matrix = unnorm_matrix
+        if self.unnorm_matrix is None:
+            self.unnorm_transform = IdentityTransform()
+            self.unnorm_matrix = torch.eye(self.ndim)
+        else:
+            self.unnorm_transform = LinearTransform(self.unnorm_matrix)
+        return self.unnorm_transform
+
+    def set_projections(self, projections: list[list[Histogram]]) -> list[list[Histogram]]:
+        """Set list of measured projections (histograms)."""
+        self.projections = projections
+        if self.projections is None:
+            self.projections = [[]]
+        return self.projections
+
+    def init_lagrange_functions(self, **interp_kws) -> list[list[LagrangeFunction]]:
+        """Initialize lagrange multipler functions.
+
+        The function h(u_proj) = 1 if the measured projection g(u_proj) > 0,
+        otherwise h(u_proj) = 0.
+
+        Key word arguments passed to `LagrangeFunction` constructor.
+        """
+        self.lagrange_functions = []
+        for index in range(len(self.projections)):
+            self.lagrange_functions.append([])
+            for projection in self.projections[index]:
+                values = torch.zeros(projection.shape)
+                values[projection.values > 0.0] = 1.0
+                lagrange_function = LagrangeFunction(
+                    ndim=projection.ndim,
+                    axis=projection.axis,
+                    coords=projection.coords,
+                    values=values,
+                )
+                self.lagrange_functions[-1].append(lagrange_function)
+        return self.lagrange_functions
+
+    def unnormalize(self, z: torch.Tensor) -> torch.Tensor:
+        """Unnormalize coordinates z: x = Vz."""
+        if self.unnorm_transform is None:
+            self.unnorm_transform = IdentityTransform()
+        return self.unnorm_transform(z)
+
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize coordinates x: z = V^-1 z."""
+        return self.unnorm_transform.inverse(x)
+
+
+
+
+        
