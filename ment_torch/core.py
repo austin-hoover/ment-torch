@@ -207,7 +207,38 @@ class MENT:
         """Normalize coordinates x: z = V^-1 z."""
         return self.unnorm_transform.inverse(x)
 
+    def prob(self, z: torch.Tensor, squeeze: bool = True) -> torch.Tensor:
+        """Compute probability density at points x = Vz.
 
+        The points z are defined in normalized phase space (equal to
+        regular phase space if V = I.
+        """
+        if z.ndim == 1:
+            z = z[None, :]
 
+        x = self.unnormalize(z)
+
+        prob = torch.ones(z.shape[0])
+        for index, transform in enumerate(self.transforms):
+            u = transform(x)
+            for lagrange_function in self.lagrange_functions[index]:
+                prob = prob * lagrange_function(u)
+        prob = prob * self.prior.prob(z)
+
+        if squeeze:
+            prob = torch.squeeze(prob)
+        
+        return prob
+
+    def sample(self, size: int, **kws) -> torch.Tensor:
+        """Sample `size` particles from the distribution.
+
+        Key word arguments go to `self.sampler`.
+        """
+        def prob_func(z: torch.Tensor) -> torch.Tensor:
+            return self.prob(z, squeeze=False)
+
+        z = self.sampler(prob_func, size, **kws)
+        return z
 
         
