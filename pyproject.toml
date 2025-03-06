@@ -1,5 +1,6 @@
 [project]
-name = "ment"
+name = "ment-torch"
+version = "0.0.1"
 dependencies = []
 
 [build-system]
