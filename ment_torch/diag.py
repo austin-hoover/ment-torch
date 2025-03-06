@@ -86,10 +86,10 @@ class HistogramND(Histogram):
         return self.bin(x)
 
 
-class HistogramND(Histogram):
+class Histogram1D(Histogram):
     def __init__(
         self,
-        axis: int,
+        axis: int = 0,
         edges: torch.Tensor = None,
         coords: torch.Tensor = None,
         values: torch.Tensor = None,
@@ -133,8 +133,7 @@ class HistogramND(Histogram):
     def bin(self, x: torch.Tensor) -> torch.Tensor:
         x_proj = self.project(x)
 
-        values = None
-        hist_obj = torch.histogram(x_proj, self.edges, density=True)
+        hist_obj = torch.histogram(x_proj, bins=self.edges, density=True)
         values = hist_obj.hist
         
         self.values = values

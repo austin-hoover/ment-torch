@@ -3,10 +3,10 @@ from typing import Callable
 from typing import TypeAlias
 from typing import Union
 
-import numpy as np
+import torch
 
-from ..diag import Histogram
-from ..utils import unravel
+from .diag import Histogram
+from .utils import unravel
 
 
 class Transform:
