@@ -22,7 +22,12 @@ def get_grid_points(grid_coords) -> torch.Tensor:
     return torch.stack([C.ravel() for C in torch.meshgrid(*grid_coords, indexing="ij")], axis=-1)
 
 
-class HistogramND:
+class Histogram:
+    def __init__(self) -> None:
+        return
+        
+
+class HistogramND(Histogram):
     def __init__(
         self,
         axis: tuple[int, ...],
@@ -30,6 +35,8 @@ class HistogramND:
         coords: list[torch.Tensor] = None,
         values: torch.Tensor = None,
     ) -> None:
+        super().__init__()
+        
         self.axis = axis
         self.ndim = len(axis)
 
@@ -79,7 +86,7 @@ class HistogramND:
         return self.bin(x)
 
 
-class Histogram1D:
+class HistogramND(Histogram):
     def __init__(
         self,
         axis: int,
@@ -87,6 +94,8 @@ class Histogram1D:
         coords: torch.Tensor = None,
         values: torch.Tensor = None,
     ) -> None:
+        super().__init__()
+
         self.axis = axis
         self.ndim = 1
 
