@@ -194,8 +194,7 @@ class FlowSampler(Sampler):
         return self.train_history
 
     def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
-        if not (prob_func is self.prob_func):
-            self.trained = False
+        self.trained = False
             
         if not self.trained:
             self.train(prob_func)
