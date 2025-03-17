@@ -32,36 +32,6 @@ def random_shuffle(items: torch.Tensor, rng: torch.Generator = None) -> torch.Te
     return items[idx]
 
 
-def sample_hist(
-    values: torch.Tensor,
-    edges: List[torch.Tensor],
-    size: int,
-    noise: float = 0.0,
-    device: torch.device = None,
-    rng: torch.Generator = None,
-) -> torch.Tensor:
-    
-    ndim = values.ndim
-    if ndim == 1:
-        edges = [edges]
-
-    pdf = torch.ravel(values) / torch.sum(values)
-    idx = torch.squeeze(torch.nonzero(pdf))
-    idx = random_choice(idx, size, pdf=pdf)    
-    idx = torch.unravel_index(idx, values.shape)
-
-    x = torch.zeros((size, ndim), device=device)
-    for axis in range(ndim):
-        lb = edges[axis][idx[axis]]
-        ub = edges[axis][idx[axis] + 1]
-        x[:, axis] = random_uniform(lb, ub, size, device=device, rng=rng)
-        if noise:
-            delta = ub - lb
-            x[:, axis] += 0.5 * random_uniform(-delta, delta, size, device=device, rng=rng)
-    x = torch.squeeze(x)
-    return x
-
-
 class Sampler:
     def __init__(
         self,
@@ -146,17 +116,14 @@ class GridSampler(Sampler):
         return points
 
     def add_noise(self, x: torch.Tensor) -> torch.Tensor:
-        for axis in range(self.ndim):
-            delta = ub - lb
-            delta = delta * self.noise
-            x[:, axis] += 0.5 * random_uniform(-delta, delta, size, device=self.device, rng=self.rng)
         return x
-            
+    
     def _sample(self, prob_func: Callable, size: int) -> torch.Tensor:
         values = prob_func(self.get_grid_points())    
         values = values / torch.sum(values)
+        
         idx = torch.squeeze(torch.nonzero(values))
-        idx = random_choice(idx, size, pdf=values)    
+        idx = random_choice(idx, size, pdf=values[idx])
         idx = torch.unravel_index(idx, self.shape)
     
         x = torch.zeros((size, self.ndim), device=self.device)
@@ -164,8 +131,12 @@ class GridSampler(Sampler):
             lb = self.edges[axis][idx[axis]]
             ub = self.edges[axis][idx[axis] + 1]
             x[:, axis] = random_uniform(lb, ub, size, device=self.device, rng=self.rng)
-        x = torch.squeeze(x)
-        return x
+
+            if self.noise:
+                delta = (ub - lb) * self.noise
+                x[:, axis] += 0.5 * random_uniform(-delta, delta, size, device=self.device, rng=self.rng)
+
+        return torch.squeeze(x)
         
 
 class MetropolisHastingsSampler(Sampler):
