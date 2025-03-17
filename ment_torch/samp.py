@@ -33,6 +33,7 @@ def random_shuffle(items: torch.Tensor, rng: torch.Generator = None) -> torch.Te
 
 
 class Sampler:
+    """Base class for particle samplers."""
     def __init__(
         self,
         ndim: int,
@@ -78,6 +79,7 @@ class Sampler:
 
 
 class GridSampler(Sampler):
+    """Samples from discretized distribution on regular grid."""
     def __init__(
         self,
         limits: list[tuple[float]],
@@ -140,7 +142,7 @@ class GridSampler(Sampler):
         
 
 class MetropolisHastingsSampler(Sampler):
-    """Vectorized Metropolis-Hastings.
+    """Samples using Metropolis-Hastings algorithm.
 
     https://colindcarroll.com/2019/08/18/very-parallel-mcmc-sampling/
     """
@@ -271,6 +273,7 @@ class MetropolisHastingsSampler(Sampler):
 
 
 class FlowSampler(Sampler):
+    """Samples using normalizing flow trained by reverse KLD."""
     def __init__(
         self, 
         flow: zuko.flows.Flow, 
@@ -286,7 +289,7 @@ class FlowSampler(Sampler):
 
         self.unnorm_matrix = unnorm_matrix
         if self.unnorm_matrix is None:
-            self.unnorm_matrix = torch.eye(ndim)   
+            self.unnorm_matrix = torch.eye(self.ndim)   
 
         self.train_kws = train_kws
         if self.train_kws is None:
@@ -300,9 +303,9 @@ class FlowSampler(Sampler):
         self.train_kws.setdefault("print_freq", 100)
         self.train_kws.setdefault("verbose", 0)
 
-        self.train_history = {}
-        self.train_history["loss"] = []
-        self.train_history["time"] = []
+        self.results = {}
+        self.results["loss"] = []
+        self.results["time"] = []
 
     def unnormalize(self, z: torch.Tensor) -> torch.Tensor:
         return torch.matmul(z, self.unnorm_matrix.T)
@@ -311,9 +314,9 @@ class FlowSampler(Sampler):
         self.prob_func = prob_func
         self.trained = True
 
-        self.train_history = {}
-        self.train_history["loss"] = []
-        self.train_history["time"] = []
+        self.results = {}
+        self.results["loss"] = []
+        self.results["time"] = []
 
         iters = self.train_kws["iters"]
         batch_size = self.train_kws["batch_size"]
@@ -341,15 +344,13 @@ class FlowSampler(Sampler):
                 param_group["lr"] = max(lr_min, lr_decay * param_group["lr"])
     
             # Append to history array
-            self.train_history["loss"].append(loss.detach())
-            self.train_history["time"].append(time.time() - start_time)
+            self.results["loss"].append(loss.detach())
+            self.results["time"].append(time.time() - start_time)
     
             # Print update
             if verbose and (iteration % print_freq == 0):
                 print(iteration, loss)
         
-        return self.train_history
-
     def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
         self.trained = False
             
