@@ -83,3 +83,16 @@ def simulate(
         for diagnostic in diagnostics_copy[index]:
             diagnostic(u)
     return diagnostics_copy
+
+
+def simulate_with_diag_update(
+    x: torch.Tensor, 
+    transforms: list[Callable], 
+    diagnostics: list[list[Histogram]],
+    **kws
+) -> list[list[Histogram]]:
+    diagnostics_copy = copy_histograms(diagnostics)
+    for diagnostic in unravel(diagnostics_copy):
+        for key, val in kws.items():
+            setattr(diagnostic, key, val)
+    return simulate(x, transforms, diagnostics_copy)
