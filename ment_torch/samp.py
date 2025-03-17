@@ -275,11 +275,7 @@ class MetropolisHastingsSampler(Sampler):
 class FlowSampler(Sampler):
     """Samples using normalizing flow trained by reverse KLD."""
     def __init__(
-        self, 
-        flow: zuko.flows.Flow, 
-        unnorm_matrix: torch.Tensor = None, 
-        train_kws: dict = None,
-        **kws
+        self, flow: zuko.flows.Flow, unnorm_matrix: torch.Tensor = None, train_kws: dict = None, **kws
     ) -> None:
         super().__init__(**kws)
         
