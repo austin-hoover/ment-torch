@@ -4,14 +4,15 @@ from typing import Callable
 from typing import List
 from typing import Tuple
 
+import hamiltorch
 import numpy as np
 import torch
 import zuko
 from tqdm import tqdm
 
-from .utils import edges_to_coords
-from .utils import coords_to_edges
-from .utils import get_grid_points
+from ..utils import edges_to_coords
+from ..utils import coords_to_edges
+from ..utils import get_grid_points
 
 
 def tqdm_wrapper(iterable, verbose=False):
@@ -234,15 +235,22 @@ class MetropolisHastingsSampler(Sampler):
         points[0] = start
         prob = prob_func(start)
 
+        t0 = time.time()
+
         self.results = {}
         self.results["n_total_accepted"] = 0
         self.results["n_total"] = 0
         self.results["acceptance_rate"] = None
+        self.results["time"] = None
+        self.results["time_per_step"] = None
 
         for i in tqdm_wrapper(range(1, size), self.verbose):
             proposal_point = points[i - 1] + proposal_points[i - 1]
             proposal_prob = prob_func(proposal_point)
             accept = proposal_prob > prob * random_uniforms[i - 1]
+
+            self.results["time"] = time.time() - t0
+            self.results["time_per_step"] = self.results["time"] / (i + 1)
 
             if i > self.burnin:
                 self.results["n_total_accepted"] += torch.count_nonzero(accept)
@@ -391,3 +399,51 @@ class FlowSampler(Sampler):
             x = self.flow().sample((size,))
             x = self.unnormalize(x)
             return x
+
+
+class HamiltonianMonteCarloSampler(Sampler):
+    """Samples using Hamiltonian Monte Carlo (HMC).
+
+    https://github.com/AdamCobb/hamiltorch
+    """
+
+    def __init__(
+        self,
+        chains: int = 1,
+        burnin: int = 0,
+        start: torch.Tensor = None,
+        step_size: float = 0.20,
+        steps_per_samp: int = 5,
+        **kws,
+    ) -> None:
+        super().__init__(**kws)
+
+        self.chains = chains
+        if self.chains > 1:
+            raise NotImplementedError
+
+        self.start = start
+        self.burnin = burnin
+        self.step_size = step_size
+        self.steps_per_samp = steps_per_samp
+
+    def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
+        if self.seed is not None:
+            hamiltorch.set_random_seed(self.seed)
+
+        def log_prob_func(x: torch.Tensor) -> torch.Tensor:
+            return torch.log(prob_func(x) + 1.00e-12)
+
+        start = self.start
+        if start is None:
+            start = torch.zeros(self.ndim)
+
+        x = hamiltorch.sample(
+            log_prob_func=log_prob_func,
+            params_init=start,
+            num_samples=size,
+            step_size=self.step_size,
+            num_steps_per_sample=self.steps_per_samp,
+        )
+        x = torch.vstack(x)
+        return x
