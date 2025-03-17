@@ -67,7 +67,7 @@ class Distribution:
             x = self.transform(x)
         x = torch.from_numpy(x)
         return x
-        
+
     def _sample(self, n: int) -> np.ndarray:
         raise NotImplementedError
 

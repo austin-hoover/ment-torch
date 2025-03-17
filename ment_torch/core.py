@@ -16,10 +16,12 @@ from .utils import wrap_tqdm
 
 class RegularGridInterpolator:
     # https://github.com/sbarratt/torch_interpolations/blob/master/torch_interpolations/multilinear.py
-    def __init__(self, coords: list[torch.Tensor], values: torch.Tensor, fill_value: float = 0.0) -> None:
+    def __init__(
+        self, coords: list[torch.Tensor], values: torch.Tensor, fill_value: float = 0.0
+    ) -> None:
         self.coords = coords
         self.values = values
-        self.fill_value = torch.tensor(fill_value)        
+        self.fill_value = torch.tensor(fill_value)
 
         assert isinstance(self.coords, tuple) or isinstance(self.coords, list)
         assert isinstance(self.values, torch.Tensor)
@@ -55,7 +57,7 @@ class RegularGridInterpolator:
             dist_right[dist_right < 0] = 0.0
             both_zero = (dist_left == 0) & (dist_right == 0)
             dist_left[both_zero] = dist_right[both_zero] = 1.0
- 
+
             idxs.append((idx_left, idx_right))
             dists.append((dist_left, dist_right))
             overalls.append(dist_left + dist_right)
@@ -69,31 +71,34 @@ class RegularGridInterpolator:
         result = numerator / denominator
 
         # Handle bounds
-        out_of_bounds = torch.zeros(new_points.shape[1], dtype=torch.bool, device=self.values.device)
+        out_of_bounds = torch.zeros(
+            new_points.shape[1], dtype=torch.bool, device=self.values.device
+        )
         for x, c in zip(new_points, self.coords):
             out_of_bounds = out_of_bounds | (x < c[0]) | (x > c[-1])
         result[out_of_bounds] = self.fill_value
 
         return result
 
+
 class LagrangeFunction:
     def __init__(
-        self, 
-        ndim: int, 
-        axis: tuple[int] | int, 
+        self,
+        ndim: int,
+        axis: tuple[int] | int,
         coords: list[torch.Tensor] | torch.Tensor,
         values: torch.Tensor,
     ) -> None:
         self.ndim = ndim
         self.axis = axis
-        
+
         if type(self.axis) is int:
             self.axis = (self.axis,)
-            
+
         self.coords = coords
         if type(self.coords) is torch.Tensor:
             self.coords = [self.coords]
-            
+
         self.values = self.set_values(values)
 
         self.limits = [(c[0], c[-1]) for c in self.coords]
@@ -170,7 +175,9 @@ class MENT:
             self.unnorm_transform = LinearTransform(self.unnorm_matrix)
         return self.unnorm_transform
 
-    def set_projections(self, projections: list[list[Histogram]]) -> list[list[Histogram]]:
+    def set_projections(
+        self, projections: list[list[Histogram]]
+    ) -> list[list[Histogram]]:
         """Set list of measured projections (histograms)."""
         self.projections = projections
         if self.projections is None:
@@ -230,7 +237,7 @@ class MENT:
 
         if squeeze:
             prob = torch.squeeze(prob)
-        
+
         return prob
 
     def sample(self, size: int, **kws) -> torch.Tensor:
@@ -238,6 +245,7 @@ class MENT:
 
         Key word arguments go to `self.sampler`.
         """
+
         def prob_func(z: torch.Tensor) -> torch.Tensor:
             return self.prob(z, squeeze=False)
 
@@ -249,7 +257,9 @@ class MENT:
         diagnostic = self.diagnostics[index][diag_index]
         return diagnostic.get_grid_points()
 
-    def get_integration_points(self, index: int, diag_index: int, method: str = "grid") -> torch.Tensor:
+    def get_integration_points(
+        self, index: int, diag_index: int, method: str = "grid"
+    ) -> torch.Tensor:
         """Return integration points for specific diagnnostic."""
         if self.integration_points is not None:
             return self.integration_points
@@ -260,7 +270,9 @@ class MENT:
         if type(projection_axis) is int:
             projection_axis = (projection_axis,)
 
-        integration_axis = tuple([axis for axis in range(self.ndim) if axis not in projection_axis])
+        integration_axis = tuple(
+            [axis for axis in range(self.ndim) if axis not in projection_axis]
+        )
         integration_ndim = len(integration_axis)
         integration_limits = self.integration_limits[index][diag_index]
         integration_size = self.integration_size
@@ -270,8 +282,12 @@ class MENT:
             integration_limits = [integration_limits]
 
         if method == "grid":
-            integration_grid_resolution = int(integration_size ** (1.0 / integration_ndim))
-            integration_grid_shape = tuple(integration_ndim * [integration_grid_resolution])
+            integration_grid_resolution = int(
+                integration_size ** (1.0 / integration_ndim)
+            )
+            integration_grid_shape = tuple(
+                integration_ndim * [integration_grid_resolution]
+            )
             integration_grid_coords = [
                 torch.linspace(
                     integration_limits[i][0],
@@ -318,11 +334,13 @@ class MENT:
         transform = self.transforms[index]
         diagnostic = self.diagnostics[index][diag_index]
         diagnostic.values *= 0.0
-        
+
         values_proj = torch.clone(diagnostic.values)
-        
+
         if self.mode in ["sample", "forward"]:
-            values_proj = diagnostic(transform(self.unnormalize(self.sample(self.nsamp))))
+            values_proj = diagnostic(
+                transform(self.unnormalize(self.sample(self.nsamp)))
+            )
 
         elif self.mode in ["integrate", "reverse"]:
             # Get projection grid axis.
@@ -332,7 +350,9 @@ class MENT:
             projection_ndim = len(projection_axis)
 
             # Get integration grid axis and limits.
-            integration_axis = [axis for axis in range(self.ndim) if axis not in projection_axis]
+            integration_axis = [
+                axis for axis in range(self.ndim) if axis not in projection_axis
+            ]
             integration_axis = tuple(integration_axis)
             integration_ndim = len(integration_axis)
             integration_limits = self.integration_limits[index][diag_index]
@@ -422,6 +442,3 @@ class MENT:
                 self.lagrange_functions[index][diag_index] = lagrange_function
 
         self.epoch += 1
-
-
-        

@@ -13,7 +13,7 @@ from .utils import get_grid_points
 class Histogram:
     def __init__(self, blur: float = 0.0) -> None:
         self.blur = blur
-        
+
 
 class HistogramND(Histogram):
     def __init__(
@@ -25,7 +25,7 @@ class HistogramND(Histogram):
         **kws
     ) -> None:
         super().__init__(**kws)
-        
+
         self.axis = axis
         self.ndim = len(axis)
 
@@ -41,7 +41,9 @@ class HistogramND(Histogram):
         if self.values is None:
             self.values = torch.zeros(self.shape)
 
-        self.bin_sizes = [self.coords[i][1] - self.coords[i][0] for i in range(self.ndim)]
+        self.bin_sizes = [
+            self.coords[i][1] - self.coords[i][0] for i in range(self.ndim)
+        ]
         self.bin_volume = torch.prod(self.bin_sizes)
         self.grid_shape = tuple([len(c) for c in self.coords])
 
@@ -66,7 +68,7 @@ class HistogramND(Histogram):
 
         hist_obj = torch.histogramdd(x_proj, bins=self.edges, density=True)
         values = hist_obj.hist
-        
+
         self.values = values
 
         if self.blur:
@@ -75,7 +77,7 @@ class HistogramND(Histogram):
             values = scipy.ndimage.gaussian_filter(values, self.blur)
             values = torch.from_numpy(values)
             values = self.values.to(device)
-        
+
         self.normalize()
         return self.values
 
@@ -111,7 +113,7 @@ class Histogram1D(Histogram):
 
         self.bin_size = self.coords[1] - self.coords[0]
         self.bin_volume = self.bin_width = self.bin_size
-        
+
     def copy(self) -> Self:
         return copy.deepcopy(self)
 
@@ -140,7 +142,7 @@ class Histogram1D(Histogram):
             values = scipy.ndimage.gaussian_filter1d(values, self.blur)
             values = torch.from_numpy(values)
             values = self.values.to(device)
-        
+
         self.values = values
         self.normalize()
         return self.values

@@ -21,7 +21,9 @@ class GaussianPrior(Prior):
             self.scale = self.scale * torch.ones(self.ndim)
 
     def prob(self, x: torch.Tensor) -> torch.Tensor:
-        denom = math.sqrt((2.0 * math.pi) ** self.ndim) * torch.sqrt(torch.prod(self.scale))
+        denom = math.sqrt((2.0 * math.pi) ** self.ndim) * torch.sqrt(
+            torch.prod(self.scale)
+        )
         prob = torch.exp(-0.5 * torch.sum(torch.square(x / self.scale), axis=1))
         prob = prob / denom
         return prob

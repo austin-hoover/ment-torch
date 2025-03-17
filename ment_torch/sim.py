@@ -72,11 +72,9 @@ def copy_histograms(histograms: list[list[Histogram]]) -> list[list[Histogram]]:
 
 
 def simulate(
-    x: torch.Tensor, 
-    transforms: list[Callable], 
-    diagnostics: list[list[Histogram]]
+    x: torch.Tensor, transforms: list[Callable], diagnostics: list[list[Histogram]]
 ) -> list[list[Histogram]]:
-    
+
     diagnostics_copy = copy_histograms(diagnostics)
     for index, transform in enumerate(transforms):
         u = transform(x)
@@ -86,8 +84,8 @@ def simulate(
 
 
 def simulate_with_diag_update(
-    x: torch.Tensor, 
-    transforms: list[Callable], 
+    x: torch.Tensor,
+    transforms: list[Callable],
     diagnostics: list[list[Histogram]],
     **kws
 ) -> list[list[Histogram]]:
