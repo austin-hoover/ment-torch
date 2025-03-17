@@ -23,16 +23,8 @@ def random_uniform(lb: float, ub: float, size: int, rng: torch.Generator = None,
 
 
 def random_choice(items: torch.Tensor, size: int, pdf: torch.Tensor, rng: torch.Generator = None) -> torch.Tensor:
-    idx = torch.multinomial(items, size, replacement=True, generator=rng)
+    idx = torch.multinomial(pdf, num_samples=size, replacement=True, generator=rng)
     return items[idx]
-
-
-def sample_hist_bins(values: torch.Tensor, size: int, rng: torch.Generator = None) -> torch.Tensor:
-    pdf = torch.ravel(values) + 1.00e-15
-    pdf = pdf / torch.sum(pdf)
-    idx = torch.squeeze(torch.nonzero(pdf))
-    idx = random_choice(idx, size, pdf=pdf, rng=rng)
-    return idx
 
 
 def sample_hist(
@@ -48,19 +40,21 @@ def sample_hist(
     if ndim == 1:
         edges = [edges]
 
-    idx = sample_hist_bins(values, size, rng=rng)
+    pdf = torch.ravel(values) / torch.sum(values)
+    idx = torch.squeeze(torch.nonzero(pdf))
+    idx = random_choice(idx, size, pdf=pdf)    
     idx = torch.unravel_index(idx, values.shape)
 
     x = torch.zeros((size, ndim), device=device)
     for axis in range(ndim):
         lb = edges[axis][idx[axis]]
         ub = edges[axis][idx[axis] + 1]
-        x[:, axis] = random_uniform(lb, ub, size, rng=rng, device=device)
+        x[:, axis] = random_uniform(lb, ub, size, device=device, rng=rng)
         if noise:
             delta = ub - lb
-            x[:, axis] += 0.5 * random_uniform(-delta, delta, size, rng=rng, device=device)
-            
-    return torch.squeeze(x)
+            x[:, axis] += 0.5 * random_uniform(-delta, delta, size, device=device, rng=rng)
+    x = torch.squeeze(x)
+    return x
 
 
 def sample_metropolis_hastings(
@@ -187,12 +181,45 @@ def sample_metropolis_hastings(
 
 
 class Sampler:
-    def __init__(self, ndim: int, verbose: int = 0) -> None:
+    def __init__(
+        self,
+        ndim: int,
+        verbose: int = 0, 
+        device: torch.device = None, 
+        seed: int = None,
+        noise: float = 0.0,
+        noise_type: float = "gaussian",
+    ) -> None:
         self.ndim = ndim
         self.verbose = verbose
+        self.device = device
+        
+        self.seed = seed
+        self.rng = torch.Generator()
+        if self.seed is not None:
+            self.rng.manual_seed(self.seed)
+            
+        self.noise = noise
+        self.noise_type = noise_type
 
-    def __call__(self, prob_func: Callable) -> torch.Tensor:
-        raise NotImplementedError        
+    def add_noise(self, x: torch.Tensor) -> torch.Tensor:
+        x_add = torch.zeros(x.shape, device=self.device)
+        if self.noise_type == "uniform":
+            x_add = random_uniform(-0.5, 0.5, device=device, rng=self.rng)
+            x_add = x_add * self.noise_scale
+        elif self.noise_type == "gaussian":
+            x_add = torch.randn(x.shape)
+            x_add = x_add * self.noise_scale
+        return x + x_add  
+
+    def _sample(self, prob_func: Callable, size: int) -> torch.Tensor:
+        raise NotImplementedError    
+
+    def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
+        x = self._sample(prob_func, size)
+        if self.noise:
+            x = self.add_noise(x)
+        return x
 
 
 class GridSampler(Sampler):
@@ -202,12 +229,10 @@ class GridSampler(Sampler):
         shape: tuple[int],
         noise: float = 0.0,
         store: bool = True,
-        device=None,
         **kws
     ) -> None:
         super().__init__(self, **kws)
         
-        self.device = device
         self.shape = shape
         self.limits = limits
         self.ndim = len(limits)
@@ -228,16 +253,90 @@ class GridSampler(Sampler):
     def get_grid_points(self) -> torch.Tensor:
         if self.points is not None:
             return self.points
+            
         points = get_grid_points(self.coords)
+        
         if self.store:
             self.points = points
         return points
 
-    def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
-        prob = prob_func(self.get_grid_points())
-        prob = torch.reshape(prob, self.shape)
-        x = sample_hist(prob, self.edges, size=size, noise=self.noise, device=self.device)
+    def add_noise(self, x: torch.Tensor) -> torch.Tensor:
+        for axis in range(self.ndim):
+            delta = ub - lb
+            delta = delta * self.noise
+            x[:, axis] += 0.5 * random_uniform(-delta, delta, size, device=self.device, rng=self.rng)
         return x
+            
+    def _sample(self, prob_func: Callable, size: int) -> torch.Tensor:
+        values = prob_func(self.get_grid_points())    
+        values = values / torch.sum(values)
+        idx = torch.squeeze(torch.nonzero(values))
+        idx = random_choice(idx, size, pdf=values)    
+        idx = torch.unravel_index(idx, self.shape)
+    
+        x = torch.zeros((size, self.ndim), device=self.device)
+        for axis in range(self.ndim):
+            lb = self.edges[axis][idx[axis]]
+            ub = self.edges[axis][idx[axis] + 1]
+            x[:, axis] = random_uniform(lb, ub, size, device=self.device, rng=self.rng)
+        x = torch.squeeze(x)
+        return x
+        
+
+class MetropolisHastingsSampler(Sampler):
+    def __init__(
+        self,
+        chains: int = 1,
+        burnin: int = 1000,
+        start: torch.Tensor = None,
+        proposal_cov: np.ndarray = None,
+        allow_zero_start: bool = True,
+        shuffle: bool = False,
+        noise_scale: float = None,
+        noise_type: str = "uniform",
+        **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
+        self.chains = chains
+        self.burnin = burnin
+        self.start = start
+        self.proposal_cov = proposal_cov
+        self.shuffle = shuffle
+        self.allow_zero_start = allow_zero_start
+
+        self.noise_scale = noise_scale
+        self.noise_type = noise_type
+
+    def add_noise(self, x: np.ndarray) -> np.ndarray:
+        x_add = np.zeros(x.shape)
+        if self.noise_type == "uniform":
+            x_add = self.rng.uniform(size=x.shape) - 0.5
+            x_add *= self.noise_scale
+        elif self.noise_type == "gaussian":
+            x_add = self.rng.normal(scale=self.noise_scale, size=x.shape)
+        return x + x_add            
+                
+    def sample(self, prob_func: Callable, size: int) -> np.ndarray:
+        x = sample_metropolis_hastings(
+            prob_func,
+            ndim=self.ndim,
+            size=int(math.ceil(size / float(self.chains))),
+            chains=self.chains,
+            burnin=self.burnin,
+            start=self.start,
+            proposal_cov=self.proposal_cov,
+            merge=True,
+            allow_zero_start=self.allow_zero_start,
+            verbose=self.verbose,
+            debug=self.debug,
+            seed=self.seed,
+        )        
+        if self.shuffle:
+            self.rng.shuffle(x)
+        if self.noise_scale:
+            x = self.add_noise(x)
+        return x[:size]
+
 
 
 class FlowSampler(Sampler):
