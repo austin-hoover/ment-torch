@@ -1,5 +1,6 @@
 import copy
 import math
+import scipy.ndimage
 import torch
 from typing import Union
 from typing import Self
@@ -10,8 +11,8 @@ from .utils import get_grid_points
 
 
 class Histogram:
-    def __init__(self) -> None:
-        return
+    def __init__(self, blur: float = 0.0) -> None:
+        self.blur = blur
         
 
 class HistogramND(Histogram):
@@ -21,8 +22,9 @@ class HistogramND(Histogram):
         edges: list[torch.Tensor] = None,
         coords: list[torch.Tensor] = None,
         values: torch.Tensor = None,
+        **kws
     ) -> None:
-        super().__init__()
+        super().__init__(**kws)
         
         self.axis = axis
         self.ndim = len(axis)
@@ -66,6 +68,14 @@ class HistogramND(Histogram):
         values = hist_obj.hist
         
         self.values = values
+
+        if self.blur:
+            device = values.device
+            values = values.detach().cpu.numpy()
+            values = scipy.ndimage.gaussian_filter(values, self.blur)
+            values = torch.from_numpy(values)
+            values = self.values.to(device)
+        
         self.normalize()
         return self.values
 
@@ -80,8 +90,9 @@ class Histogram1D(Histogram):
         edges: torch.Tensor = None,
         coords: torch.Tensor = None,
         values: torch.Tensor = None,
+        **kws
     ) -> None:
-        super().__init__()
+        super().__init__(**kws)
 
         self.axis = axis
         self.ndim = 1
@@ -122,6 +133,13 @@ class Histogram1D(Histogram):
 
         hist_obj = torch.histogram(x_proj, bins=self.edges, density=True)
         values = hist_obj.hist
+
+        if self.blur:
+            device = values.device
+            values = values.detach().cpu.numpy()
+            values = scipy.ndimage.gaussian_filter1d(values, self.blur)
+            values = torch.from_numpy(values)
+            values = self.values.to(device)
         
         self.values = values
         self.normalize()
