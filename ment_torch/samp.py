@@ -18,18 +18,20 @@ def tqdm_wrapper(iterable, verbose=False):
     return tqdm(iterable) if verbose else iterable
 
 
-def random_uniform(lb: float, ub: float, size: int, device=None) -> torch.Tensor:
-    return lb + (ub - lb) * torch.rand(size, device=device)
+def random_uniform(lb: float, ub: float, size: int, rng: torch.Generator = None, device: torch.device = None) -> torch.Tensor:
+    return lb + (ub - lb) * torch.rand(size, device=device, generator=rng)
 
 
-def random_choice(items: torch.tensor, size: int, p: torch.Tensor):
-    return items[p.multinomial(num_samples=size, replacement=True)]
+def random_choice(items: torch.Tensor, size: int, pdf: torch.Tensor, rng: torch.Generator = None) -> torch.Tensor:
+    idx = torch.multinomial(items, size, replacement=True, generator=rng)
+    return items[idx]
 
 
-def sample_hist_bins(values: torch.Tensor, size: int) -> torch.Tensor:
+def sample_hist_bins(values: torch.Tensor, size: int, rng: torch.Generator = None) -> torch.Tensor:
     pdf = torch.ravel(values) + 1.00e-15
+    pdf = pdf / torch.sum(pdf)
     idx = torch.squeeze(torch.nonzero(pdf))
-    idx = random_choice(idx, size, p=(pdf / torch.sum(pdf)))
+    idx = random_choice(idx, size, pdf=pdf, rng=rng)
     return idx
 
 
@@ -39,24 +41,149 @@ def sample_hist(
     size: int,
     noise: float = 0.0,
     device: torch.device = None,
+    rng: torch.Generator = None,
 ) -> torch.Tensor:
+    
     ndim = values.ndim
     if ndim == 1:
         edges = [edges]
 
-    idx = sample_hist_bins(values, size)
+    idx = sample_hist_bins(values, size, rng=rng)
     idx = torch.unravel_index(idx, values.shape)
 
     x = torch.zeros((size, ndim), device=device)
     for axis in range(ndim):
         lb = edges[axis][idx[axis]]
         ub = edges[axis][idx[axis] + 1]
-        x[:, axis] = random_uniform(lb, ub, size, device=device)
+        x[:, axis] = random_uniform(lb, ub, size, rng=rng, device=device)
         if noise:
             delta = ub - lb
-            x[:, axis] += 0.5 * random_uniform(-delta, delta, size, device=device)
-    x = torch.squeeze(x)
-    return x
+            x[:, axis] += 0.5 * random_uniform(-delta, delta, size, rng=rng, device=device)
+            
+    return torch.squeeze(x)
+
+
+def sample_metropolis_hastings(
+    prob_func: Callable,
+    ndim: int,
+    size: int,
+    chains: int = 1,
+    burnin: int = 10_000,
+    start: torch.Tensor = None,
+    proposal_cov: torch.Tensor = None,
+    merge: bool = True,
+    seed: int = None,
+    verbose: int = 0,
+    device: torch.device = None,
+) -> np.ndarray:
+    """Vectorized Metropolis-Hastings.
+
+    https://colindcarroll.com/2019/08/18/very-parallel-mcmc-sampling/
+
+    Parameters
+    ----------
+    prob_func : Callable
+        Function returning probability density p(x) at points x. The function must be
+        vectorized so that x is a batch of points of shape (nchains, ndim).
+    size : int
+        The number of samples per chain (excluding burn-in).
+    chains : int
+        Number of sampling chains.
+    burnin : int
+        Number of burnin iterations (applies to each chain).
+    start : torch.Tensor
+        An array of shape (chains, ndim) giving the starting point of each chain. All
+        start points must be in regions of nonzero probability density.
+    proposal_cov : torch.Tensor
+        We use a Gaussian proposal distribution centered on the current point in
+        the random walk. This variable is the covariance matrix of the Gaussian
+        distribution.
+    merge : bool
+        Whether to merge the sampling chains. If the chains are merged, the return
+        array has shape (size * chains, ndim). Otherwise if has shape (size, chains, ndim).
+    seed : int
+        Seed used in random number generators.
+
+    Returns
+    -------
+    torch.Tensor
+        Sampled points with burn-in points discarded. Shape is (size, ndim) if merge=True
+        or (size * chains, chains, ndim) if merge=False.
+    """      
+    rng = torch.Generator(device=device)
+    if seed is not None:
+        rng.manual_seed(seed)
+        torch.manual_seed(seed)
+        
+    # Initialize list of points. From now on we each "point" is really a batch of 
+    # size (nchains, ndim). Burnin-points will be discarded later.
+    size = size + burnin
+    points = torch.zeros((size, chains, ndim), device=device) 
+
+    # Sample proposal points from a Gaussian distribution. (The means will be updated
+    # during the random walk.)
+    proposal_mean = torch.zeros(ndim, device=device)
+    if proposal_cov is None:
+        proposal_cov = torch.eye(ndim, device=device)
+    proposal_dist = torch.distributions.MultivariateNormal(proposal_mean, proposal_cov)
+    proposal_points = proposal_dist.sample((size - 1, chains))
+
+    # Set starting point for each chain. If none is provided, sample from the proposal
+    # distribution centered at the origin.
+    if start is None:
+        start_dist = torch.distributions.MultivariateNormal(proposal_mean, proposal_cov)
+        start = start_dist.sample((chains,))
+        start *= 0.50
+        
+    points[0] = start
+
+    # Execute random walks
+    random_uniforms = random_uniform(0.0, 1.0, size=(size - 1, chains), rng=rng, device=device)
+    accept = torch.zeros(chains, device=device)
+
+    results = {}
+    results["n_total_accepted"] = 0
+    results["n_total"] = 0
+    results["acceptance_rate"] = None
+
+    for i in tqdm_wrapper(range(1, size), verbose):
+        proposal_point = points[i - 1] + proposal_points[i - 1]
+        proposal_prob = prob_func(proposal_point)
+        accept = proposal_prob > prob * random_uniforms[i - 1]
+
+        if i > burnin:
+            results["n_total_accepted"] += torch.count_nonzero(accept)
+            results["n_total"] += chains
+            results["acceptance_rate"] = results["n_total_accepted"] / results["n_total"]
+            if verbose > 2:
+                print(f"debug {i:05.0f}")
+                print(results)
+
+        points[i] = points[i - 1]
+        points[i][accept] = proposal_point[accept]
+        prob[accept] = proposal_prob[accept]
+
+    points = points[burnin:]
+
+    if verbose > 1:        
+        print("debug acceptance rate =", acceptance_rate)
+        for axis in range(ndim):
+            x_chain_stds = [torch.std( chain[:, axis]) for chain in points]
+            x_chain_avgs = [torch.mean(chain[:, axis]) for chain in points]
+            print(f"debug axis={axis} between-chain avg(x_chain_std) =", torch.mean(x_chain_stds))
+            print(f"debug axis={axis} between-chain std(x_chain_std) =", torch.std( x_chain_stds))
+            print(f"debug axis={axis} between-chain avg(x_chain_avg) =", torch.mean(x_chain_avgs))
+            print(f"debug axis={axis} between-chain std(x_chain_avg) =", torch.std( x_chain_avgs))
+    
+            x_avg = torch.mean(torch.hstack([chain[:, axis] for chain in points]))
+            x_std = torch.std( torch.hstack([chain[:, axis] for chain in points]))
+            print(f"debug axis={axis} x_std =", x_std)
+            print(f"debug axis={axis} x_avg =", x_avg)
+
+    if merge:
+        points = points.reshape(points.shape[0] * points.shape[1], points.shape[2])
+    
+    return points
 
 
 class Sampler:
