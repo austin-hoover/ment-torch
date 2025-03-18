@@ -1,14 +1,8 @@
-import torch
-import numpy as np
-import time
-from termcolor import colored
-import inspect
 import random
 import sys
-import concurrent.futures
-
-
-
+import time
+import torch
+import numpy as np
 
 
 def set_random_seed(seed=None):
@@ -146,21 +140,6 @@ class LogProbError(Exception):
     pass
 
 
-# def flatten(value):
-#     # Taken from autograd.misc.flatten
-#     t = type(value)
-#     if t in (list, tuple):
-#         return concatenate(map(flatten, value))
-#     elif t is dict:
-#         return concatenate(flatten(value[k]) for k in sorted(value))
-#     else:
-#         return value.contiguous().view(-1)
-#
-# def concatenate(lst):
-#     lst = list(lst)
-#     return torch.cat(lst) if lst else torch.tensor([])
-
-
 def flatten(model):
     return torch.cat([p.flatten() for p in model.parameters()])
 
@@ -291,17 +270,3 @@ def jacobian(outputs, inputs, create_graph=False, return_inputs=False):
         return torch.stack(jac), inputs
     else:
         return torch.stack(jac)
-
-
-def eval_print(*expressions):
-    print("\n\n" + colored(inspect.stack()[1][3], "white", attrs=["bold"]))
-    frame = sys._getframe(1)
-    max_str_length = 0
-    for expression in expressions:
-        if len(expression) > max_str_length:
-            max_str_length = len(expression)
-    for expression in expressions:
-        val = eval(expression, frame.f_globals, frame.f_locals)
-        if isinstance(val, np.ndarray):
-            val = val.tolist()
-        print("  {} = {}".format(expression.ljust(max_str_length), repr(val)))
