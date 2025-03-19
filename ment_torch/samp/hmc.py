@@ -8,6 +8,7 @@ from numpy import pi
 import torch
 import torch.nn as nn
 
+from .core import Sampler
 from ..utils import wrap_tqdm
 
 
@@ -98,9 +99,9 @@ def sample(
     size: int = 10,
     steps_per_samp: int = 10,
     step_size: float = 0.1,
-    burn: int = 0,
+    burnin: int = 1,
     verbose: int = 0,
-) -> tuple:
+) -> dict:
     """Vectorized Hamiltonian Monte Carlo.
 
     Parameters
@@ -114,12 +115,11 @@ def sample(
         Number of samples to generate. The number of HMC steps is determined from the
         number of chains.
     steps_per_samp : int
-        The number of steps to take per trajector (often referred to as L).
+        Number of integration steps per trajectory.
     step_size : float
         Size of each step to take when doing the numerical integration.
-    burn : int
-        Number of samples to burn before collecting samples. Set to -1 for no burning
-        of samples. This must be less than `size` as `size` subsumes `burn`.
+    burnin : int
+        Number of steps before samples are collected.
     verbose : int
         If 0, do not display progress bar.
 
@@ -130,7 +130,7 @@ def sample(
     """
     device = start.device
 
-    if burn >= size:
+    if burnin >= size:
         raise RuntimeError("burn must be less than size.")
 
     if start.ndim == 1:
@@ -142,8 +142,9 @@ def sample(
     n_chains = start.shape[0]
     n_steps = int(math.ceil(size / n_chains))
     n_accepted = 0
+    acceptance_rate = None
 
-    for n in wrap_tqdm(range(n_steps + burn), verbose):
+    for n in wrap_tqdm(range(n_steps + burnin), verbose):
         # Push particles
         p = resample_momentum(x)
         ham = hamiltonian(x, p, log_prob_func)
@@ -162,8 +163,9 @@ def sample(
 
         rho = torch.minimum(torch.zeros(n_chains), ham - ham_new)
         accept = rho >= torch.log(torch.rand(n_chains))
-        if n > burn:
+        if n >= burnin:
             n_accepted += torch.sum(accept)
+            acceptance_rate = n_accepted / ((n + 1 - burnin) * n_chains)
 
         if verbose > 1:
             print("Step: {},".format(n))
@@ -173,8 +175,105 @@ def sample(
         x[accept] = x_new[accept]
         samples.append(x.detach().clone())
 
-    samples = samples[burn:]
+    samples = samples[burnin:]
     samples = torch.vstack(samples)
     samples = samples[:size]
     samples = torch.squeeze(samples)
-    return samples
+
+    results = {}
+    results["samples"] = samples
+    results["acceptance_rate"] = acceptance_rate
+    return results
+
+
+class HamiltonianMonteCarloSampler(Sampler):
+    """Hamiltonian Monte Carlo (HMC) sampler."""
+    def __init__(
+        self,
+        chains: int = 1,
+        burnin: int = 0,
+        start: torch.Tensor = None,
+        step_size: float = 0.20,
+        steps_per_samp: int = 5,
+        **kws,
+    ) -> None:
+        super().__init__(**kws)
+
+        self.chains = chains
+        if self.chains > 1:
+            raise NotImplementedError
+
+        self.start = start
+        self.burnin = burnin
+        self.step_size = step_size
+        self.steps_per_samp = steps_per_samp
+
+    def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
+        
+        def log_prob_func(x: torch.Tensor) -> torch.Tensor:
+            return torch.log(prob_func(x) + 1.00e-12)
+
+        start = self.start
+        if start is None:
+            start = torch.zeros(self.ndim)
+
+        results = sample(
+            log_prob_func,
+            start=self.start,
+            size=size,
+            steps_per_samp=self.steps_per_samp,
+            step_size=self.step_size,
+            burnin=self.burnin,
+            verbose=self.verbose,
+        )
+        self.results = results
+        samples = self.results.pop("samples")
+        return samples
+
+class HamiltonianMonteCarloSamplerOLD(Sampler):
+    """Hamiltonian Monte Carlo (HMC) sampler.
+
+    https://github.com/AdamCobb/hamiltorch
+    """
+    def __init__(
+        self,
+        chains: int = 1,
+        burnin: int = 1,
+        start: torch.Tensor = None,
+        step_size: float = 0.20,
+        steps_per_samp: int = 5,
+        **kws,
+    ) -> None:
+        super().__init__(**kws)
+
+        self.chains = chains
+        if self.chains > 1:
+            raise NotImplementedError
+
+        self.start = start
+        self.burnin = burnin
+        self.step_size = step_size
+        self.steps_per_samp = steps_per_samp
+
+    def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
+        import hamiltorch
+        
+        if self.seed is not None:
+            hamiltorch.set_random_seed(self.seed)
+
+        def log_prob_func(x: torch.Tensor) -> torch.Tensor:
+            return torch.log(prob_func(x) + 1.00e-12)
+
+        start = self.start
+        if start is None:
+            start = torch.zeros(self.ndim)
+
+        x = hamiltorch.sample(
+            log_prob_func=log_prob_func,
+            params_init=start,
+            num_samples=size,
+            step_size=self.step_size,
+            num_steps_per_sample=self.steps_per_samp,
+        )
+        x = torch.vstack(x)
+        return x

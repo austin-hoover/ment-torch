@@ -8,6 +8,7 @@ from .prior import InfiniteUniformPrior
 from .samp import FlowSampler
 from .samp import GridSampler
 from .samp import HamiltonianMonteCarloSampler
+from .samp import HamiltonianMonteCarloSamplerOLD
 from .samp import MetropolisHastingsSampler
 
 from . import dist

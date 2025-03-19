@@ -7,13 +7,6 @@ def unravel(iterable):
     return list(itertools.chain.from_iterable(iterable))
 
 
-def rotation_matrix(angle: float) -> torch.Tensor:
-    angle = torch.tensor(float(angle))
-    return torch.tensor(
-        [[torch.cos(angle), torch.sin(angle)], [-torch.sin(angle), torch.cos(angle)]]
-    )
-
-
 def coords_to_edges(coords: torch.Tensor) -> torch.Tensor:
     delta = coords[1] - coords[0]
     edges = torch.zeros(len(coords) + 1)
@@ -32,3 +25,31 @@ def get_grid_points(grid_coords: list[torch.Tensor]) -> torch.Tensor:
 
 def wrap_tqdm(iterable, verbose=True):
     return tqdm(iterable) if verbose else iterable
+
+
+def random_choice(items: torch.Tensor, size: int, pdf: torch.Tensor, rng: torch.Generator = None) -> torch.Tensor:
+    idx = torch.multinomial(pdf, num_samples=size, replacement=True, generator=rng)
+    return items[idx]
+    
+
+def random_shuffle(items: torch.Tensor, rng: torch.Generator = None) -> torch.Tensor:
+    idx = torch.randperm(items.shape[0])
+    return items[idx]
+
+
+def random_uniform(
+    lb: torch.Tensor | float,
+    ub: torch.Tensor | float,
+    size: int,
+    rng: torch.Generator = None,
+    device: torch.device = None,
+) -> torch.Tensor:
+    return lb + (ub - lb) * torch.rand(size, device=device, generator=rng)
+
+
+def rotation_matrix(angle: float) -> torch.Tensor:
+    angle = torch.tensor(float(angle))
+    return torch.tensor(
+        [[torch.cos(angle), torch.sin(angle)], [-torch.sin(angle), torch.cos(angle)]]
+    )
+
