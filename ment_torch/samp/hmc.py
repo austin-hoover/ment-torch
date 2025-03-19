@@ -1,4 +1,5 @@
-# https://github.com/AdamCobb/hamiltorch
+# Adapted from https://github.com/AdamCobb/hamiltorch
+import math
 from enum import Enum
 from typing import Callable
 from typing import Optional
@@ -7,9 +8,10 @@ from numpy import pi
 import torch
 import torch.nn as nn
 
+from ..utils import wrap_tqdm
+
 
 def compute_gradients_loop(log_prob_func: Callable, x: torch.Tensor) -> torch.Tensor:
-    """Vectorized gradient calculation (for loop)."""
     x = x.detach().requires_grad_()
     log_prob = log_prob_func(x)
     for i in range(x.shape[0]):
@@ -24,16 +26,15 @@ def compute_gradients(log_prob_func: Callable, x: torch.Tensor) -> torch.Tensor:
     return x.grad
 
 
-def resample_momentum(params: torch.Tensor, cov_matrix: torch.Tensor = None) -> torch.Tensor:
-    """Resample momentum distribution."""
-    mean = torch.zeros(params.shape[1])
+def resample_momentum(x: torch.Tensor, cov_matrix: torch.Tensor = None) -> torch.Tensor:
+    mean = torch.zeros(x.shape[1])
     if cov_matrix is None:
-        cov_matrix = torch.eye(params.shape[1])
+        cov_matrix = torch.eye(x.shape[1])
     dist = torch.distributions.MultivariateNormal(mean, cov_matrix)
-    return dist.sample((params.shape[0],))
+    return dist.sample((x.shape[0],))
 
 
-def leapfrog(
+def integrate_leapfrog(
     x: torch.Tensor,
     p: torch.Tensor,
     log_prob_func: Callable,
@@ -85,9 +86,9 @@ def leapfrog(
     return xs, ps
 
 
-def hamiltonian(params: torch.Tensor, momentum: torch.Tensor, log_prob_func: Callable) -> torch.Tensor:
-    potential = -log_prob_func(params)
-    kinetic = 0.5 * torch.sum(torch.square(momentum), axis=1)
+def hamiltonian(x: torch.Tensor, p: torch.Tensor, log_prob_func: Callable) -> torch.Tensor:
+    potential = -log_prob_func(x)
+    kinetic = 0.5 * torch.sum(torch.square(p), axis=1)
     return potential + kinetic
 
 
@@ -98,9 +99,7 @@ def sample(
     steps_per_samp: int = 10,
     step_size: float = 0.1,
     burn: int = 0,
-    merge: bool = True,
     verbose: int = 0,
-
 ) -> tuple:
     """Vectorized Hamiltonian Monte Carlo.
 
@@ -112,8 +111,8 @@ def sample(
         Initial particle coordinates. If shape=(ndim,), run a single chain;
         otherwise if shape=(nchain, ndim), run multiple chains.
     size : int
-        Sets the number of samples corresponding to the number of momentum resampling 
-        steps/the number of trajectories to sample.
+        Number of samples to generate. The number of HMC steps is determined from the
+        number of chains.
     steps_per_samp : int
         The number of steps to take per trajector (often referred to as L).
     step_size : float
@@ -121,8 +120,6 @@ def sample(
     burn : int
         Number of samples to burn before collecting samples. Set to -1 for no burning
         of samples. This must be less than `size` as `size` subsumes `burn`.
-    merge: bool
-        Whether to merge chains.
     verbose : int
         If 0, do not display progress bar.
 
@@ -139,45 +136,45 @@ def sample(
     if start.ndim == 1:
         start = start[None, :]
 
-    params = start.clone()
-    ret_params = [params.clone().detach()]
+    x = start.clone()
+    samples = [x.clone().detach()]
 
     n_chains = start.shape[0]
+    n_steps = int(math.ceil(size / n_chains))
     n_accepted = 0
 
-    for n in range(size + burn):
+    for n in wrap_tqdm(range(n_steps + burn), verbose):
         # Push particles
-        momentum = resample_momentum(params)
-        ham = hamiltonian(params, momentum, log_prob_func)
-        leapfrog_params, leapfrog_momenta = leapfrog(
-            params,
-            momentum,
+        p = resample_momentum(x)
+        ham = hamiltonian(x, p, log_prob_func)
+        x_traj, p_traj = integrate_leapfrog(
+            x,
+            p,
             log_prob_func,
             steps=steps_per_samp,
             step_size=step_size,
         )
 
         # MH proposal
-        new_params = leapfrog_params[-1].to(device).detach()
-        new_momentum = leapfrog_momenta[-1].to(device)
-        new_ham = hamiltonian(new_params, new_momentum, log_prob_func)
+        x_new = x_traj[-1].to(device).detach()
+        p_new = p_traj[-1].to(device).detach()
+        ham_new = hamiltonian(x_new, p_new, log_prob_func)
+
+        rho = torch.minimum(torch.zeros(n_chains), ham - ham_new)
+        accept = rho >= torch.log(torch.rand(n_chains))
+        if n > burn:
+            n_accepted += torch.sum(accept)
 
         if verbose > 1:
             print("Step: {},".format(n))
             print("Hamiltonian current : {},".format(ham))
-            print("Hamiltonian proposed: {},".format(new_ham))
+            print("Hamiltonian proposed: {},".format(ham_new))
 
-        rho = torch.minimum(torch.zeros(n_chains), ham - new_ham)
-        accept = rho >= torch.log(torch.rand(n_chains))
-        if n > burn:
-            n_accepted += torch.sum(accept)
-        params[accept] = new_params[accept]
-        ret_params.append(params.detach().clone())
+        x[accept] = x_new[accept]
+        samples.append(x.detach().clone())
 
-    ret_params = ret_params[burn:]
-    ret_params = ret_params[:size]
-
-    if merge:
-        ret_params = torch.vstack(ret_params)
-
-    return torch.squeeze(ret_params)
+    samples = samples[burn:]
+    samples = torch.vstack(samples)
+    samples = samples[:size]
+    samples = torch.squeeze(samples)
+    return samples
