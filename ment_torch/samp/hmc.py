@@ -208,7 +208,7 @@ class HamiltonianMonteCarloSampler(Sampler):
         self.step_size = step_size
         self.steps_per_samp = steps_per_samp
 
-    def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
+    def _sample(self, prob_func: Callable, size: int) -> torch.Tensor:
         
         def log_prob_func(x: torch.Tensor) -> torch.Tensor:
             return torch.log(prob_func(x) + 1.00e-12)
@@ -255,7 +255,7 @@ class HamiltonianMonteCarloSamplerOLD(Sampler):
         self.step_size = step_size
         self.steps_per_samp = steps_per_samp
 
-    def __call__(self, prob_func: Callable, size: int) -> torch.Tensor:
+    def _sample(self, prob_func: Callable, size: int) -> torch.Tensor:
         import hamiltorch
         
         if self.seed is not None:
